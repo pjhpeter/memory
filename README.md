@@ -16,7 +16,8 @@
 | `<项目>/<名字>.md` | 一条笔记：一件事一个文件 |
 | `memory-context.py` | 启动时运行：按当前所在目录找到项目，输出要注入给 Agent 的笔记目录；到了该整理的时候顺带提醒 |
 | `memory-write-check.py` | 回合结束时运行：用户刚说的话像纠正、偏好或决定，而记忆库没有新改动，就拦一次要求补记 |
-| `skills/memory-dream/` | 整理记忆用的 skill（合并重复、删过时、升格），源文件只在这里改 |
+| `skills/memory-dream/` | 整理记忆用的 skill（合并重复、删过时），源文件只在这里改 |
+| `skills/memory-promotion/` | 出「升格清单」请用户拍板的 skill：哪些记忆该删、该改、该升格进规则或 skill |
 | `install.sh` | 把 `skills/` 下的 skill 链接到 `~/.agents/skills/` 和 `~/.claude/skills/`，可重复运行 |
 | `sync-github.sh` | 把框架文件（不含项目记忆）同步到 GitHub，见文末 |
 
@@ -82,7 +83,7 @@ sh ~/.agents/memory/install.sh   # 链接 memory-dream 等 skill
 - **多人同时写**：一条笔记一个文件，不同 Agent 写不同文件不冲突。改 `MEMORY.md` 只追加或改自己那一行；`pull --rebase` 冲突时两边的目录行都保留。
 - **用之前先核对**：笔记里提到的文件、命令、分支、issue 状态可能已过期，用前先查一下，不一致就当场改掉那条笔记。
 - **新项目**：建 `<项目名>/MEMORY.md`，需要时在 `PATH_ALIASES` 里加目录映射。
-- **定期整理**：距上次整理超过 14 天、或之后新增了 15 条以上，启动时会提醒。用本仓库的 skill `memory-dream`（`skills/memory-dream/SKILL.md`）合并重复、删掉过时的、把已经稳定的经验升格进规则或 skill，并把 `MEMORY.md` 控制在 200 行以内。整理时持有 `<项目>/.dream.lock`，看到别人的锁就别动这个项目。
+- **定期整理**：距上次整理超过 14 天、或之后新增了 15 条以上，启动时会提醒。用本仓库的 skill `memory-dream`（`skills/memory-dream/SKILL.md`）合并重复、删掉过时的、把已经稳定的经验升格进规则或 skill，并把 `MEMORY.md` 控制在 200 行以内。每周另用 skill `memory-promotion` 出一份升格清单，用户拍板后才执行。整理时持有 `<项目>/.dream.lock`，看到别人的锁就别动这个项目。
 
 ## GitHub 镜像只放框架
 
