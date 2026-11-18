@@ -6,7 +6,7 @@ set -eu
 SRC=$(cd "$(dirname "$0")" && pwd)
 MIRROR=${MEMORY_GITHUB_MIRROR:-$HOME/.agents/memory-github}
 REMOTE=git@github.com:pjhpeter/memory.git
-FILES="README.md .gitignore memory-context.py memory-write-check.py sync-github.sh"
+FILES="README.md .gitignore memory-context.py memory-write-check.py install.sh sync-github.sh skills"
 
 if [ ! -d "$MIRROR/.git" ]; then
   git init -q -b main "$MIRROR"
@@ -16,7 +16,7 @@ fi
 # 镜像里只允许出现白名单文件；先清掉其余内容，避免旧文件或误放的记忆残留
 find "$MIRROR" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 for f in $FILES; do
-  cp "$SRC/$f" "$MIRROR/$f"
+  cp -R "$SRC/$f" "$MIRROR/$f"
 done
 
 if find "$MIRROR" -name MEMORY.md -not -path "*/.git/*" | grep -q .; then
