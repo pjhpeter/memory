@@ -60,10 +60,71 @@ metadata:
 | --- | --- | --- |
 | Factory Droid | `~/.factory/settings.json` 的 SessionStart hook：`memory-context.py factory-session-start` | Stop hook：`memory-write-check.py factory-stop` |
 | Codex | `~/.codex/hooks.json` 的 SessionStart hook：`memory-context.py codex-session-start`（新 hook 要在 Codex 里用 `/hooks` 信任后才生效） | Stop hook：`memory-write-check.py codex-stop` |
-| omp | 扩展 `~/.omp/agent/extensions/shared-memory-context.ts` 调 `memory-context.py --cwd <目录>` | 同一扩展的 session_stop 调 `memory-write-check.py omp` |
+| omp | 扩展 `~/.omp/agent/extensions/shared-memory-context.ts` 在每回合开始前（`before_agent_start`）调 `memory-context.py --cwd <目录>` | 同一扩展的 `session_stop` 调 `memory-write-check.py omp` |
 | Claude Code | 把 `~/.claude/projects/<项目>/memory` 做成指向本仓库项目目录的软链接 | — |
 
 找不到对应项目时脚本什么都不输出、退出码 0，脚本出任何错都放行，不会卡住 Agent 启动。改了脚本或 hook 要新开一个会话实测。
+
+### 配置片段
+
+下面的 `/Users/<用户名>` 换成本机家目录的绝对路径。已有别的 hook 时，把这几项追加进对应数组，不要整段覆盖。
+
+Factory Droid，`~/.factory/settings.json` 顶层的 `hooks`：
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "timeout": 10,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-context.py' factory-session-start" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "timeout": 15,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-write-check.py' factory-stop" }] }
+    ]
+  }
+}
+```
+
+Codex，`~/.codex/hooks.json`（结构相同，参数换成 `codex-session-start` / `codex-stop`）：
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "timeout": 10,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-context.py' codex-session-start" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "timeout": 15,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-write-check.py' codex-stop" }] }
+    ]
+  }
+}
+```
+
+配好后在 Codex 里运行 `/hooks`，信任这两个新 hook，否则不生效。
+
+omp：扩展文件 `shared-memory-context.ts` 不在本仓库，核心是两个事件：`pi.on("before_agent_start")` 里运行 `python3 memory-context.py --cwd <当前目录>`，把输出拼进系统提示；`pi.on("session_stop")` 里运行 `python3 memory-write-check.py omp`，按它的输出决定是否拦下这一回合。
+
+Claude Code：
+
+```sh
+ln -s ~/.agents/memory/<项目> ~/.claude/projects/<Claude 的项目目录名>/memory
+```
+
+## 用定时任务自动跑两个 skill
+
+**思路**：整理记忆和出升格清单都是「隔一段时间做一次」的事，靠人记着喊很容易忘。所以交给 Agent 的定时任务按时启动，任务指令只写一句「按某某 skill 做」，具体步骤全在 skill 里。这样改流程只改 skill，定时任务不用动，换别的 Agent 也能照着同一份 skill 做。
+
+本机现在用 Codex 桌面端的定时任务（配置在 `~/.codex/automations/<任务>/automation.toml`，在 Codex 界面里建、改即可）：
+
+| 任务 | 时间 | 指令 | 能不能直接改记忆 |
+| --- | --- | --- | --- |
+| 每日整理共用记忆库 | 周二到周日 13:00 | 按 `memory-dream` 技能逐个整理 `~/.agents/memory/` 下各项目的共用记忆库，用中文简报结果 | 能，skill 里已授权直接修改、提交并推送 |
+| 整理本周记忆升格清单 | 每周一 13:00 | 按 `memory-promotion` 技能给每个项目出本周升格清单，请用户拍板；用户答复前只读不改 | 不能，只出清单，用户同意后才执行 |
+
+周一只出升格清单，不跑每日整理。换成别的 Agent 的定时功能时，照抄这两句指令即可。手动跑也一样：对 Agent 说「整理记忆」或「出升格清单」。
 
 ## 装到一台新电脑
 
@@ -83,7 +144,7 @@ sh ~/.agents/memory/install.sh   # 链接 memory-dream 等 skill
 - **多人同时写**：一条笔记一个文件，不同 Agent 写不同文件不冲突。改 `MEMORY.md` 只追加或改自己那一行；`pull --rebase` 冲突时两边的目录行都保留。
 - **用之前先核对**：笔记里提到的文件、命令、分支、issue 状态可能已过期，用前先查一下，不一致就当场改掉那条笔记。
 - **新项目**：建 `<项目名>/MEMORY.md`，需要时在 `PATH_ALIASES` 里加目录映射。
-- **定期整理**：距上次整理超过 14 天、或之后新增了 15 条以上，启动时会提醒。用本仓库的 skill `memory-dream`（`skills/memory-dream/SKILL.md`）合并重复、删掉过时的、把已经稳定的经验升格进规则或 skill，并把 `MEMORY.md` 控制在 200 行以内。每周另用 skill `memory-promotion` 出一份升格清单，用户拍板后才执行。整理时持有 `<项目>/.dream.lock`，看到别人的锁就别动这个项目。
+- **定期整理**：平时由上面的定时任务自动跑；距上次整理超过 14 天、或之后新增了 15 条以上，启动时也会提醒。用本仓库的 skill `memory-dream`（`skills/memory-dream/SKILL.md`）合并重复、删掉过时的、把已经稳定的经验升格进规则或 skill，并把 `MEMORY.md` 控制在 200 行以内。每周另用 skill `memory-promotion` 出一份升格清单，用户拍板后才执行。整理时持有 `<项目>/.dream.lock`，看到别人的锁就别动这个项目。
 
 ## GitHub 镜像只放框架
 
