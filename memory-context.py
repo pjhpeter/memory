@@ -2,10 +2,11 @@
 """按当前工作目录找到对应项目的共用记忆库，输出要注入给 Agent 的上下文。
 
 用法：
-  memory-context.py --cwd <目录>          输出纯文本（omp 扩展用）
-  memory-context.py codex-session-start   从 stdin 读 Codex / Factory SessionStart hook JSON，输出 hookSpecificOutput
-  memory-context.py factory-session-start 同上（两者格式一致）
-找不到对应项目时不输出任何内容，退出码 0，绝不阻塞 Agent 启动。
+  memory-context.py --cwd <目录>              输出纯文本（omp 扩展用）
+  memory-context.py codex-session-start       从 stdin 读 Codex / Factory SessionStart hook JSON，输出 hookSpecificOutput
+  memory-context.py factory-session-start     同上（两者格式一致）
+  memory-context.py antigravity-session-start 从 stdin 读 Antigravity SessionStart hook JSON，输出 injectSteps
+找不到对应项目时不输出任何内容（Antigravity 输出 {}），退出码 0，绝不阻塞 Agent 启动。
 """
 import json
 import os
@@ -117,7 +118,18 @@ def build_context(cwd):
     )
 
 
+def resolve_antigravity_cwd(payload):
+    """Antigravity hook 进程的当前目录是 hooks.json 所在目录，优先从 cwd / workspacePaths 找项目。"""
+    candidates = [payload.get("cwd"), *(payload.get("workspacePaths") or [])]
+    for path in candidates:
+        if path and resolve_project(path):
+            return path
+    return next((path for path in candidates if path), os.getcwd())
+
+
 def main(argv):
+    is_antigravity = argv[:1] == ["antigravity-session-start"]
+    wrote_json = False
     try:
         if argv[:1] in (["codex-session-start"], ["factory-session-start"]):
             payload = json.load(sys.stdin)
@@ -129,9 +141,18 @@ def main(argv):
                     ensure_ascii=False,
                 )
             return 0
+        if is_antigravity:
+            payload = json.load(sys.stdin)
+            context = build_context(resolve_antigravity_cwd(payload))
+            out = {"injectSteps": [{"systemMessage": {"systemMessage": context}}]} if context else {}
+            json.dump(out, sys.stdout, ensure_ascii=False)
+            wrote_json = True
+            return 0
         cwd = argv[argv.index("--cwd") + 1] if "--cwd" in argv else os.getcwd()
         sys.stdout.write(build_context(cwd))
     except Exception as error:  # 记忆注入失败不能影响 Agent 启动
+        if is_antigravity and not wrote_json:
+            sys.stdout.write("{}")
         sys.stderr.write(f"memory-context: {error}\n")
     return 0
 

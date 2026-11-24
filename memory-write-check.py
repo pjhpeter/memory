@@ -5,7 +5,8 @@
   memory-write-check.py omp --transcript <会话 jsonl> --cwd <目录>   需要拦截时输出理由文本
   memory-write-check.py codex-stop                                 从 stdin 读 Codex Stop hook JSON
   memory-write-check.py factory-stop                               从 stdin 读 Factory Droid Stop hook JSON
-同一条用户消息只拦一次：omp 由扩展记录，Codex 靠 stop_hook_active。任何异常都放行。
+  memory-write-check.py antigravity-stop                           从 stdin 读 Antigravity Stop hook JSON
+同一条用户消息只拦一次：omp 由扩展记录，Codex / Factory 靠 stop_hook_active，Antigravity 靠 continuationActive。任何异常都放行。
 """
 import importlib.util
 import json
@@ -24,6 +25,7 @@ SIGNALS = re.compile(
 )
 SKIP_MARK = "无需记忆"
 SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?(</system-reminder>|$)", re.S)
+USER_REQUEST_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.S)
 
 
 def load_resolver():
@@ -108,6 +110,31 @@ def read_factory(path):
     return user, at, assistant
 
 
+def read_antigravity(path):
+    """Antigravity 会话优先读同目录未截断的 transcript_full.jsonl，用户消息取 <USER_REQUEST> 正文。"""
+    full_path = os.path.join(os.path.dirname(path), "transcript_full.jsonl")
+    target = full_path if os.path.isfile(full_path) else path
+    user, at, assistant = None, None, ""
+    with open(target, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            step_type = entry.get("type")
+            if step_type == "USER_INPUT" and entry.get("source", "USER_EXPLICIT") == "USER_EXPLICIT":
+                raw = text_of(entry.get("content"))
+                match = USER_REQUEST_RE.search(raw)
+                text = (match.group(1) if match else raw).strip()
+                if text:
+                    user, at, assistant = text, entry.get("created_at"), ""
+            elif step_type == "PLANNER_RESPONSE":
+                text = text_of(entry.get("content")).strip()
+                if text:
+                    assistant = f"{assistant}\n{text}".strip() if assistant else text
+    return user, at, assistant
+
+
 def memory_changed_since(timestamp):
     status = subprocess.run(
         ["git", "-C", MEMORY_ROOT, "status", "--porcelain"], capture_output=True, text=True, timeout=5
@@ -142,6 +169,8 @@ def check(user, at, assistant, cwd):
 
 
 def main(argv):
+    is_antigravity = argv[:1] == ["antigravity-stop"]
+    wrote_json = False
     try:
         if argv[:1] == ["codex-stop"]:
             payload = json.load(sys.stdin)
@@ -161,6 +190,29 @@ def main(argv):
             if reason:
                 json.dump({"decision": "block", "reason": reason}, sys.stdout, ensure_ascii=False)
             return 0
+        if is_antigravity:
+            payload = json.load(sys.stdin)
+            reason_code = payload.get("terminationReason")
+            if (
+                payload.get("continuationActive")
+                or payload.get("fullyIdle") is False
+                or (reason_code and reason_code != "NO_TOOL_CALL")
+                or not payload.get("transcriptPath")
+            ):
+                json.dump({"decision": "stop"}, sys.stdout)
+                wrote_json = True
+                return 0
+            user, at, assistant = read_antigravity(payload["transcriptPath"])
+            resolver = load_resolver()
+            candidates = [payload.get("cwd"), *(payload.get("workspacePaths") or [])]
+            cwd = next((p for p in candidates if p and resolver(p)), None) or next(
+                (p for p in candidates if p), os.getcwd()
+            )
+            reason = check(user, at, assistant, cwd)
+            out = {"decision": "continue", "reason": reason} if reason else {"decision": "stop"}
+            json.dump(out, sys.stdout, ensure_ascii=False)
+            wrote_json = True
+            return 0
         if argv[:1] == ["omp"]:
             transcript = argv[argv.index("--transcript") + 1]
             cwd = argv[argv.index("--cwd") + 1] if "--cwd" in argv else os.getcwd()
@@ -169,6 +221,8 @@ def main(argv):
             if reason:
                 sys.stdout.write(json.dumps({"key": f"{at}", "reason": reason}, ensure_ascii=False))
     except Exception as error:  # 检查失败一律放行，不能卡住 Agent
+        if is_antigravity and not wrote_json:
+            sys.stdout.write('{"decision": "stop"}')
         sys.stderr.write(f"memory-write-check: {error}\n")
     return 0
 

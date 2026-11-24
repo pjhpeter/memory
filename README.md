@@ -1,6 +1,6 @@
 # memory：所有编码 Agent 共用的长期记忆库
 
-**遇到的问题**：Claude Code、Codex、omp、Factory Droid 等 Agent 每开一个新会话就把之前的事全忘了。用户纠正过的做法、踩过的坑、拍板过的决定，换个会话或换个 Agent 又要再说一遍，就像每天来一个新实习生。
+**遇到的问题**：Claude Code、Codex、omp、Factory Droid、Antigravity 等 Agent 每开一个新会话就把之前的事全忘了。用户纠正过的做法、踩过的坑、拍板过的决定，换个会话或换个 Agent 又要再说一遍，就像每天来一个新实习生。
 
 **怎么解决**：把这些经验按项目写成一条条小笔记，放在这个仓库里。每次 Agent 启动时，自动把对应项目的笔记目录塞给它；回合结束时，再检查有没有该记下却漏记的事。
 
@@ -58,6 +58,7 @@ metadata:
 
 | Agent | 启动时注入 | 回合结束检查 |
 | --- | --- | --- |
+| Antigravity | `~/.gemini/config/hooks.json` 的 SessionStart hook：`memory-context.py antigravity-session-start` | Stop hook：`memory-write-check.py antigravity-stop` |
 | Factory Droid | `~/.factory/settings.json` 的 SessionStart hook：`memory-context.py factory-session-start` | Stop hook：`memory-write-check.py factory-stop` |
 | Codex | `~/.codex/hooks.json` 的 SessionStart hook：`memory-context.py codex-session-start`（新 hook 要在 Codex 里用 `/hooks` 信任后才生效） | Stop hook：`memory-write-check.py codex-stop` |
 | omp | 扩展 `~/.omp/agent/extensions/shared-memory-context.ts` 在每回合开始前（`before_agent_start`）调 `memory-context.py --cwd <目录>` | 同一扩展的 `session_stop` 调 `memory-write-check.py omp` |
@@ -68,6 +69,23 @@ metadata:
 ### 配置片段
 
 下面的 `/Users/<用户名>` 换成本机家目录的绝对路径。已有别的 hook 时，把这几项追加进对应数组，不要整段覆盖。
+
+Antigravity，`~/.gemini/config/hooks.json`（顶层是自定义 hook 名，`SessionStart` 和 `Stop` 直接放数组）：
+
+```json
+{
+  "shared-memory": {
+    "SessionStart": [
+      { "type": "command", "timeout": 10,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-context.py' antigravity-session-start" }
+    ],
+    "Stop": [
+      { "type": "command", "timeout": 15,
+        "command": "python3 '/Users/<用户名>/.agents/memory/memory-write-check.py' antigravity-stop" }
+    ]
+  }
+}
+```
 
 Factory Droid，`~/.factory/settings.json` 顶层的 `hooks`：
 
