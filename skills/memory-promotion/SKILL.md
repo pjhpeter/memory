@@ -26,9 +26,12 @@ description: 给共用记忆库 ~/.agents/memory/ 下每个项目出一份「升
 - 每个项目一小节，开头一行写条目总数和各类建议的数量。
 - 「保留」的只列文件名，不展开。
 - 其余每类一张表：条目文件、首次记录日期、作者、建议、一句理由；升格的再加目标位置和拟写入原文。
-- 结尾问用户：哪些照办、哪些不动、哪些要调整，可以回复「全部照办」或按条目文件名指定。
+- **同时生成交互式 HTML 决策页**：把全部待处理条目整理为 JSON（结构含 `projects[].{name, total, keep_files, items:[{file, created_at, author, action, reason, target, proposed_text}]}`），通过标准输入管道或临时文件调用本 skill 附带脚本：
+  `python3 ~/.agents/skills/memory-promotion/scripts/render_decision_html.py --input - --out ~/.agents/memory/.promotion-decision.html`
+  在会话末尾附上完整路径与可复制命令 `open ~/.agents/memory/.promotion-decision.html`，说明「可在网页里点选改动作/写备注，点底部「复制决策指令给 Agent」直接粘回会话」。
+- 结尾问用户：哪些照办、哪些不动、哪些要调整，可以回复「全部照办」、按条目文件名指定，或直接粘贴交互页复制出的决策指令。
 
-没有任何需要处理的条目时，只回复一句「本周记忆无需处理」。
+没有任何需要处理的条目时，只回复一句「本周记忆无需处理」，不生成 HTML 页。
 
 ## 四、用户答复后执行（只动用户同意的条目）
 
