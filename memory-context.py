@@ -3,6 +3,7 @@
 
 用法：
   memory-context.py --cwd <目录>              输出纯文本（omp 扩展用）
+  memory-context.py --link-claude <仓库目录>  为已建记忆的项目补齐 Claude Code 软链接
   memory-context.py codex-session-start       从 stdin 读 Codex / Factory SessionStart hook JSON，输出 hookSpecificOutput
   memory-context.py factory-session-start     同上（两者格式一致）
   memory-context.py antigravity-session-start 从 stdin 读 Antigravity SessionStart hook JSON，输出 injectSteps
@@ -10,6 +11,7 @@
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,20 +23,108 @@ DREAM_MAX_DAYS = 14
 DREAM_MAX_NEW_ENTRIES = 15
 # 本地目录名和记忆项目名不同的仓库：目录段 → 项目名
 PATH_ALIASES = {".hwf": "team-up"}
+# 与记忆库内部结构冲突的保留目录名，自动识别时绝不占用
+RESERVED_NAMES = frozenset({"skills", ".git"})
+# 不当作自动记忆项目的系统/框架/临时目录前缀
+EXCLUDED_ROOTS = tuple(
+    os.path.realpath(path)
+    for path in (
+        MEMORY_ROOT,
+        os.path.expanduser("~/.agents"),
+        "/tmp",
+        "/private/tmp",
+        "/var",
+        "/private/var",
+    )
+)
 
 
-def resolve_project(cwd):
-    projects = {
+def _is_excluded_path(path):
+    real = os.path.realpath(path)
+    return any(real == root or real.startswith(root + os.sep) for root in EXCLUDED_ROOTS)
+
+
+def _git_main_repo_root(cwd):
+    """通过 git-common-dir 定位主仓库根目录（worktree 自动归到主仓库，避免碎片化建库）。"""
+    if not cwd or not os.path.isdir(cwd) or _is_excluded_path(cwd):
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        return None
+    if not out:
+        return None
+    common_dir = os.path.realpath(out if os.path.isabs(out) else os.path.join(cwd, out))
+    repo_root = os.path.dirname(common_dir) if os.path.basename(common_dir) == ".git" else common_dir
+    if _is_excluded_path(repo_root):
+        return None
+    return repo_root
+
+
+def existing_projects():
+    return {
         name
         for name in os.listdir(MEMORY_ROOT)
         if os.path.isfile(os.path.join(MEMORY_ROOT, name, "MEMORY.md"))
     }
-    # 从最深的路径段往上找，子项目（如 web-v1/backend/drawing-board）优先于父项目。
-    for segment in reversed(os.path.realpath(cwd).split(os.sep)):
+
+
+def resolve_project(cwd):
+    """先匹配已建库项目（含子项目与别名），未命中时按所在本地 Git 主仓库名自动识别。"""
+    if not cwd:
+        return None
+    projects = existing_projects()
+    real_cwd = os.path.realpath(cwd)
+    # 1. 从最深的路径段往上找，子项目（如 web-v1/backend/drawing-board）优先于父项目。
+    for segment in reversed(real_cwd.split(os.sep)):
         segment = PATH_ALIASES.get(segment, segment)
         if segment in projects:
             return segment
-    return None
+    # 2. 任意本地 Git 仓库自动按主仓库目录名识别（排除系统/框架/临时目录与保留名）。
+    repo_root = _git_main_repo_root(real_cwd)
+    if not repo_root:
+        return None
+    name = PATH_ALIASES.get(os.path.basename(repo_root), os.path.basename(repo_root))
+    if not name or name.startswith(".") or name in RESERVED_NAMES:
+        return None
+    return name
+
+
+def has_memory_index(project):
+    return bool(project) and os.path.isfile(os.path.join(MEMORY_ROOT, project, "MEMORY.md"))
+
+
+def ensure_claude_link(repo_path, project=None):
+    """按 Claude Code 项目路径编码规则补齐 ~/.claude/projects/<encoded>/memory 软链接。"""
+    real_path = os.path.realpath(repo_path)
+    resolved = project or resolve_project(real_path)
+    if not resolved:
+        raise ValueError(f"无法从路径识别项目：{repo_path}")
+    target = os.path.join(MEMORY_ROOT, resolved)
+    if not os.path.isdir(target):
+        raise ValueError(f"记忆目录尚不存在：{target}")
+    # 若在仓库子目录调用且不是独立子项目目录（如 drawing-board），自动归到主仓库根路径再编码。
+    git_root = _git_main_repo_root(real_path)
+    link_base = real_path
+    if git_root and PATH_ALIASES.get(os.path.basename(real_path), os.path.basename(real_path)) != resolved:
+        link_base = git_root
+    encoded = re.sub(r"[/.]", "-", link_base)
+    dest = os.path.join(os.path.expanduser("~/.claude/projects"), encoded, "memory")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if os.path.islink(dest):
+        if os.path.realpath(dest) == os.path.realpath(target):
+            return f"已是正确链接：{dest} → {target}"
+        os.unlink(dest)
+    elif os.path.exists(dest):
+        return f"跳过 {dest}：已有同名真实目录，请人工确认合并后再建软链接"
+    os.symlink(target, dest)
+    return f"已链接：{dest} → {target}"
 
 
 def git_lines(*args):
@@ -95,9 +185,25 @@ def build_context(cwd):
     if not project:
         return ""
     project_dir = os.path.join(MEMORY_ROOT, project)
+    shown_dir = project_dir.replace(os.path.expanduser("~"), "~", 1)
+    if not has_memory_index(project):
+        # 惰性建库：新 Git 仓库不预先落盘空目录，只注入自动建库指引与漏记提醒。
+        repo_root = _git_main_repo_root(os.path.realpath(cwd)) or os.path.realpath(cwd)
+        return "\n".join(
+            [
+                "# 共用记忆库（启动时自动识别，按需自动建库）",
+                f"当前项目：{project}（尚未建记忆目录）；目标记忆目录：{shown_dir}/",
+                "本项目目前还没有记忆条目，不要预先建空目录。",
+                "以下情况要当场自动新建记忆目录与 MEMORY.md、写入条目并提交推送（格式见 ~/.agents/rules/topics/11-memory.md）："
+                "用户纠正了你的做法、说了偏好或习惯、拍板了方案或决策、你踩坑后查清了根因、发现了代码里看不出来但以后还会用到的事实。",
+                f"首次建好目录后，顺手执行 `python3 ~/.agents/memory/memory-context.py --link-claude '{repo_root}'` 补齐 Claude Code 软链接。",
+                "不用记：只对本次任务有效的一次性指令；看代码、git、issue 就能知道的现状和进度；规则或 skill 已经写明的事。"
+                "回合结束时有检查，漏记会被拦下一次。",
+            ]
+        )
+
     with open(os.path.join(project_dir, "MEMORY.md"), encoding="utf-8") as handle:
         lines = handle.read().splitlines()[:MAX_INDEX_LINES]
-    shown_dir = project_dir.replace(os.path.expanduser("~"), "~", 1)
     return "\n".join(
         [
             "# 共用记忆库（启动时自动注入）",
@@ -131,6 +237,11 @@ def main(argv):
     is_antigravity = argv[:1] == ["antigravity-session-start"]
     wrote_json = False
     try:
+        if "--link-claude" in argv:
+            idx = argv.index("--link-claude")
+            target_repo = argv[idx + 1] if idx + 1 < len(argv) else os.getcwd()
+            sys.stdout.write(ensure_claude_link(target_repo) + "\n")
+            return 0
         if argv[:1] in (["codex-session-start"], ["factory-session-start"]):
             payload = json.load(sys.stdin)
             context = build_context(payload.get("cwd") or os.getcwd())

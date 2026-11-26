@@ -21,15 +21,16 @@
 | `install.sh` | 把 `skills/` 下的 skill 链接到 `~/.agents/skills/` 和 `~/.claude/skills/`，可重复运行 |
 | `sync-github.sh` | 把框架文件（不含项目记忆）同步到 GitHub，见文末 |
 
-现有项目：
+现有项目示例：
 
 | 目录 | 对应的代码 |
 | --- | --- |
 | `web-v1/` | `~/code/web-v1` |
 | `drawing-board/` | `~/code/web-v1/backend/drawing-board` |
 | `team-up/` | `~/.hwf`（Herdr 交付流程、飞书桥、秘书、收件箱、主动接活） |
+| `agent-worker/` | `~/code/agent-worker`（飞书问题中枢） |
 
-`memory-context.py` 从当前目录的最深一层往上找同名的项目目录，所以子项目优先于父项目；目录名和项目名不一样的（如 `~/.hwf` → `team-up`）写在脚本里的 `PATH_ALIASES`。
+`memory-context.py` 与 `memory-write-check.py` 先从当前目录的最深一层往上匹配已建库的目录（子项目优先于父项目；目录名和项目名不一样的如 `~/.hwf` → `team-up` 写在 `PATH_ALIASES`）；若未命中，则自动按当前所在的**任意本地 Git 主仓库名**识别项目（通过 `git-common-dir` 自动把 worktree 归到主仓库，并排除 `~/.agents/`、`/tmp`、`/var` 等目录）。新项目采取**惰性建库**：进入时不建空目录，但照常开启引导与漏记检查，首次写入记忆时自动建 `<项目>/MEMORY.md` 并可通过 `python3 ~/.agents/memory/memory-context.py --link-claude <仓库路径>` 一键补齐 Claude Code 软链接。
 
 ## 一条笔记长什么样
 
@@ -161,7 +162,7 @@ sh ~/.agents/memory/install.sh   # 链接 memory-dream 等 skill
   ```
 - **多人同时写**：一条笔记一个文件，不同 Agent 写不同文件不冲突。改 `MEMORY.md` 只追加或改自己那一行；`pull --rebase` 冲突时两边的目录行都保留。
 - **用之前先核对**：笔记里提到的文件、命令、分支、issue 状态可能已过期，用前先查一下，不一致就当场改掉那条笔记。
-- **新项目**：建 `<项目名>/MEMORY.md`，需要时在 `PATH_ALIASES` 里加目录映射。
+- **新项目**：在任意本地 Git 仓库工作时都会自动按主仓库名识别（无需手工登记），首次写入记忆时自动建 `<项目名>/MEMORY.md` 并执行 `python3 ~/.agents/memory/memory-context.py --link-claude <仓库路径>` 补齐 Claude Code 软链接；只有目录名和记忆项目名不同时，才需要在 `PATH_ALIASES` 里加映射。
 - **定期整理**：平时由上面的定时任务自动跑；距上次整理超过 14 天、或之后新增了 15 条以上，启动时也会提醒。用本仓库的 skill `memory-dream`（`skills/memory-dream/SKILL.md`）合并重复、删掉过时的、把已经稳定的经验升格进规则或 skill，并把 `MEMORY.md` 控制在 200 行以内。每周另用 skill `memory-promotion` 出一份升格清单，用户拍板后才执行。整理时持有 `<项目>/.dream.lock`，看到别人的锁就别动这个项目。
 
 ## GitHub 镜像只放框架

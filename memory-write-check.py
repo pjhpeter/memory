@@ -160,10 +160,16 @@ def check(user, at, assistant, cwd):
         return ""
     start = max(0, match.start() - 30)
     snippet = user[start : match.end() + 30].replace("\n", " ")
+    index_exists = os.path.isfile(os.path.join(MEMORY_ROOT, project, "MEMORY.md"))
+    bootstrap_hint = (
+        "（先查有没有已有条目可以改）"
+        if index_exists
+        else f"（本项目尚未建库：直接新建 ~/.agents/memory/{project}/MEMORY.md 与条目文件，并运行 `python3 ~/.agents/memory/memory-context.py --link-claude '{os.path.realpath(cwd)}'` 补齐 Claude Code 软链接）"
+    )
     return (
         f"[记忆检查] 本轮用户的话里有像是纠正、偏好或决策的内容：「…{snippet}…」，但记忆库没有新改动。\n"
         f"如果其中有以后还用得上的经验，按 ~/.agents/rules/topics/11-memory.md 的格式写进 "
-        f"~/.agents/memory/{project}/（先查有没有已有条目可以改），在 MEMORY.md 补索引，然后提交并推送。\n"
+        f"~/.agents/memory/{project}/{bootstrap_hint}，在 MEMORY.md 补索引，然后提交并推送。\n"
         f"如果只是本次任务的一次性指令、没有值得长期记的，回复里写一句「{SKIP_MARK}」就可以结束。"
     )
 
